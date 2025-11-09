@@ -1,0 +1,96 @@
+name: Project Board Automation
+
+on:
+  issues:
+    types: [opened, closed, reopened, assigned]
+  pull_request:
+    types: [opened, closed, ready_for_review, review_requested]
+
+permissions:
+  issues: write
+  pull-requests: write
+  contents: read
+
+jobs:
+  sync-to-project:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Add issue to project
+        if: github.event_name == 'issues' && github.event.action == 'opened'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const issue = context.payload.issue;
+            
+            // You'll need to replace PROJECT_ID with your actual project ID
+            // Get it from: https://docs.github.com/en/issues/planning-and-tracking-with-projects/automating-your-project/using-the-api-to-manage-projects
+            
+            core.info(`Issue #${issue.number} created. Add to project board manually or configure PROJECT_ID.`);
+
+      - name: Update project status on PR
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            let status = 'In Progress';
+            
+            if (pr.state === 'closed' && pr.merged) {
+              status = 'Done';
+            } else if (pr.draft) {
+              status = 'Draft';
+            } else if (pr.state === 'open') {
+              status = 'In Review';
+            }
+            
+            core.info(`PR #${pr.number} status: ${status}`);
+
+      - name: Link PR to issues
+        if: github.event_name == 'pull_request' && github.event.action == 'opened'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            const body = pr.body || '';
+            
+            // Extract issue references (e.g., "fixes #123", "closes #456")
+            const issueRefs = body.match(/(close[sd]?|fix(e[sd])?|resolve[sd]?)\s+#(\d+)/gi);
+            
+            if (issueRefs) {
+              const comment = `🔗 This PR addresses: ${issueRefs.join(', ')}
+              
+              Relevant standards documentation:
+              - Check \`standards-and-procedures/\` for applicable guidelines
+              - Ensure compliance with governance standards`;
+              
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: pr.number,
+                body: comment
+              });
+            }
+
+  stale-issue-management:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    steps:
+      - name: Mark stale issues
+        uses: actions/stale@v9
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+          stale-issue-message: |
+            This issue has been automatically marked as stale due to inactivity.
+            
+            Please review and update if still relevant, or it will be closed in 7 days.
+            
+            Consider referencing relevant standards from `standards-and-procedures/` if applicable.
+          stale-pr-message: |
+            This PR has been automatically marked as stale due to inactivity.
+            
+            Please update or close if no longer needed.
+          days-before-stale: 60
+          days-before-close: 7
+          stale-issue-label: 'status:stale'
+          stale-pr-label: 'status:stale'
+          exempt-issue-labels: 'priority:high,status:blocked'

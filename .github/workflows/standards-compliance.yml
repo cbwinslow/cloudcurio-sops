@@ -1,0 +1,193 @@
+name: Standards Compliance Check
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  compliance-check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check standards compliance
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+            
+            // Get changed files
+            const { data: files } = await github.rest.pulls.listFiles({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.payload.pull_request.number
+            });
+            
+            const changedFiles = files.map(f => f.filename);
+            const issues = [];
+            const warnings = [];
+            const recommendations = [];
+            
+            // Check 1: _meta.md files should have proper structure
+            const metaFiles = changedFiles.filter(f => f.endsWith('_meta.md'));
+            for (const file of metaFiles) {
+              try {
+                const content = fs.readFileSync(file, 'utf8');
+                
+                if (!content.includes('## Domain')) {
+                  issues.push(`❌ ${file}: Missing required "## Domain" section`);
+                }
+                
+                if (!content.includes('## Purpose') && !content.includes('## Contents')) {
+                  warnings.push(`⚠️  ${file}: Should have either "## Purpose" or "## Contents" section`);
+                }
+                
+                // Check for minimum content length
+                if (content.length < 100) {
+                  warnings.push(`⚠️  ${file}: Content seems too brief (${content.length} chars)`);
+                }
+                
+              } catch (e) {
+                issues.push(`❌ ${file}: Could not read file - ${e.message}`);
+              }
+            }
+            
+            // Check 2: New directories should have _meta.md
+            const addedDirs = new Set();
+            files.forEach(f => {
+              if (f.status === 'added' && f.filename.includes('/')) {
+                const dir = path.dirname(f.filename);
+                if (dir.startsWith('standards-and-procedures/')) {
+                  addedDirs.add(dir);
+                }
+              }
+            });
+            
+            for (const dir of addedDirs) {
+              const metaPath = `${dir}/_meta.md`;
+              if (!changedFiles.includes(metaPath) && !fs.existsSync(metaPath)) {
+                issues.push(`❌ New directory ${dir} is missing _meta.md file`);
+              }
+            }
+            
+            // Check 3: Documentation standards
+            const mdFiles = changedFiles.filter(f => f.endsWith('.md') && !f.endsWith('_meta.md'));
+            for (const file of mdFiles) {
+              try {
+                const content = fs.readFileSync(file, 'utf8');
+                
+                // Check for heading hierarchy
+                const headings = content.match(/^#+\s+.+$/gm) || [];
+                let prevLevel = 0;
+                for (const heading of headings) {
+                  const level = heading.match(/^#+/)[0].length;
+                  if (level - prevLevel > 1) {
+                    warnings.push(`⚠️  ${file}: Heading hierarchy skip detected (h${prevLevel} to h${level})`);
+                  }
+                  prevLevel = level;
+                }
+                
+                // Check for code blocks without language
+                const codeBlocks = content.match(/```\n/g);
+                if (codeBlocks && codeBlocks.length > 0) {
+                  warnings.push(`⚠️  ${file}: ${codeBlocks.length} code block(s) without language specification`);
+                }
+                
+              } catch (e) {
+                warnings.push(`⚠️  ${file}: Could not analyze - ${e.message}`);
+              }
+            }
+            
+            // Check 4: Naming conventions
+            for (const file of changedFiles) {
+              if (file.startsWith('standards-and-procedures/')) {
+                const parts = file.split('/');
+                
+                // Check for consistent naming (lowercase with hyphens)
+                for (const part of parts) {
+                  if (part === '_meta.md' || part === 'standards-and-procedures') continue;
+                  
+                  if (part !== part.toLowerCase()) {
+                    warnings.push(`⚠️  ${file}: Directory/file name should be lowercase`);
+                  }
+                  
+                  if (part.includes('_') && part !== '_meta.md') {
+                    recommendations.push(`💡 ${file}: Consider using hyphens instead of underscores`);
+                  }
+                  
+                  if (part.includes(' ')) {
+                    issues.push(`❌ ${file}: Directory/file name should not contain spaces`);
+                  }
+                }
+              }
+            }
+            
+            // Check 5: Security considerations
+            const securityFiles = changedFiles.filter(f => 
+              f.includes('security') || 
+              f.includes('credential') || 
+              f.includes('password') ||
+              f.includes('secret')
+            );
+            
+            for (const file of securityFiles) {
+              recommendations.push(`🔒 ${file}: Security-related file - ensure no sensitive data is included`);
+            }
+            
+            // Generate compliance report
+            let report = '## 📋 Standards Compliance Report\n\n';
+            
+            if (issues.length === 0 && warnings.length === 0) {
+              report += '✅ **All compliance checks passed!**\n\n';
+            } else {
+              report += `**Summary:** ${issues.length} issues, ${warnings.length} warnings, ${recommendations.length} recommendations\n\n`;
+            }
+            
+            if (issues.length > 0) {
+              report += '### ❌ Issues (Must Fix)\n\n';
+              issues.forEach(issue => report += `- ${issue}\n`);
+              report += '\n';
+            }
+            
+            if (warnings.length > 0) {
+              report += '### ⚠️  Warnings (Should Fix)\n\n';
+              warnings.forEach(warning => report += `- ${warning}\n`);
+              report += '\n';
+            }
+            
+            if (recommendations.length > 0) {
+              report += '### 💡 Recommendations\n\n';
+              recommendations.forEach(rec => report += `- ${rec}\n`);
+              report += '\n';
+            }
+            
+            report += '### 📚 Standards Reference\n\n';
+            report += '- [Global Standards](standards-and-procedures/00-global/)\n';
+            report += '- [Document Style Guide](standards-and-procedures/00-global/document-style-guide/)\n';
+            report += '- [Classification and Labeling](standards-and-procedures/00-global/classification-and-labeling/)\n';
+            report += '\n';
+            
+            report += '---\n';
+            report += '*This compliance check helps maintain consistency and quality across all documentation.*\n';
+            
+            // Post comment
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.pull_request.number,
+              body: report
+            });
+            
+            // Fail if there are critical issues
+            if (issues.length > 0) {
+              core.setFailed(`Found ${issues.length} compliance issue(s) that must be fixed`);
+            }

@@ -1,0 +1,284 @@
+name: CrewAI Documentation Review
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+    paths:
+      - 'standards-and-procedures/**/*.md'
+      - '**/*.md'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+jobs:
+  setup-crew:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install CrewAI dependencies
+        run: |
+          pip install crewai crewai-tools langchain-openai
+          pip install markdown beautifulsoup4 pyyaml
+
+      - name: Create CrewAI configuration
+        run: |
+          cat > crew_config.py << 'EOF'
+          from crewai import Agent, Task, Crew, Process
+          from crewai_tools import FileReadTool
+          import os
+
+          # Define specialized agents
+          legal_compliance_agent = Agent(
+              role='Legal Compliance Specialist',
+              goal='Review documentation for legal compliance, regulatory requirements, and policy adherence',
+              backstory='''You are an experienced legal compliance officer with expertise in 
+              corporate governance, data protection regulations, and software licensing. 
+              You ensure all documentation meets legal standards and identifies potential compliance risks.''',
+              verbose=True,
+              allow_delegation=False
+          )
+
+          technical_writer_agent = Agent(
+              role='Technical Documentation Expert',
+              goal='Review documentation for clarity, completeness, consistency, and technical accuracy',
+              backstory='''You are a senior technical writer with 15+ years of experience in 
+              software documentation, SOPs, and standards development. You excel at making 
+              complex technical concepts clear and ensuring documentation follows best practices.''',
+              verbose=True,
+              allow_delegation=False
+          )
+
+          software_architect_agent = Agent(
+              role='Software Architecture Reviewer',
+              goal='Evaluate technical standards for best practices, security, and scalability',
+              backstory='''You are a principal software architect with deep expertise in 
+              system design, security patterns, and software engineering best practices. 
+              You ensure technical standards are practical, secure, and aligned with industry standards.''',
+              verbose=True,
+              allow_delegation=False
+          )
+
+          security_specialist_agent = Agent(
+              role='Security Standards Specialist',
+              goal='Review documentation for security implications, vulnerabilities, and security best practices',
+              backstory='''You are a cybersecurity expert specializing in secure development practices, 
+              infrastructure security, and compliance standards like SOC2, ISO27001. 
+              You identify security gaps and ensure standards promote secure operations.''',
+              verbose=True,
+              allow_delegation=False
+          )
+
+          ai_ethics_agent = Agent(
+              role='AI Ethics and Safety Specialist',
+              goal='Review AI and automation standards for ethical considerations, bias, and safety',
+              backstory='''You specialize in AI ethics, responsible AI development, and ensuring 
+              AI systems operate fairly and safely. You identify potential ethical concerns 
+              and ensure AI standards promote responsible development.''',
+              verbose=True,
+              allow_delegation=False
+          )
+
+          def create_review_tasks(file_path, file_content):
+              """Create review tasks for the crew based on file content"""
+              
+              tasks = []
+              
+              # Legal compliance review
+              legal_task = Task(
+                  description=f'''Review the documentation in {file_path} for:
+                  - Legal compliance and regulatory requirements
+                  - Policy adherence and governance standards
+                  - Licensing and intellectual property considerations
+                  - Data protection and privacy compliance
+                  
+                  Content to review:
+                  {file_content[:2000]}
+                  
+                  Provide specific recommendations for improvement.''',
+                  agent=legal_compliance_agent,
+                  expected_output='Detailed legal compliance review with specific recommendations'
+              )
+              tasks.append(legal_task)
+              
+              # Technical documentation review
+              doc_task = Task(
+                  description=f'''Review the documentation in {file_path} for:
+                  - Clarity and readability
+                  - Completeness of information
+                  - Consistency with other standards
+                  - Technical accuracy
+                  - Proper structure and formatting
+                  
+                  Content to review:
+                  {file_content[:2000]}
+                  
+                  Provide specific recommendations for improvement.''',
+                  agent=technical_writer_agent,
+                  expected_output='Comprehensive documentation quality review'
+              )
+              tasks.append(doc_task)
+              
+              # If it's related to software/infrastructure, add architecture review
+              if any(keyword in file_path.lower() for keyword in ['software', 'infrastructure', 'system', 'deployment']):
+                  arch_task = Task(
+                      description=f'''Review the technical standards in {file_path} for:
+                      - Architecture best practices
+                      - Scalability considerations
+                      - Performance implications
+                      - Maintainability and technical debt
+                      
+                      Content to review:
+                      {file_content[:2000]}
+                      
+                      Provide technical recommendations.''',
+                      agent=software_architect_agent,
+                      expected_output='Technical architecture review with recommendations'
+                  )
+                  tasks.append(arch_task)
+              
+              # Security review for all documents
+              security_task = Task(
+                  description=f'''Review {file_path} for security implications:
+                  - Security vulnerabilities or gaps
+                  - Security best practices adherence
+                  - Compliance with security standards
+                  - Risk mitigation strategies
+                  
+                  Content to review:
+                  {file_content[:2000]}
+                  
+                  Identify security concerns and provide recommendations.''',
+                  agent=security_specialist_agent,
+                  expected_output='Security review with identified risks and recommendations'
+              )
+              tasks.append(security_task)
+              
+              # AI ethics review for AI-related content
+              if 'ai' in file_path.lower() or 'automation' in file_path.lower() or 'agent' in file_path.lower():
+                  ethics_task = Task(
+                      description=f'''Review {file_path} for AI ethics and safety:
+                      - Ethical considerations and potential bias
+                      - Safety measures and risk assessment
+                      - Transparency and explainability
+                      - Human oversight and accountability
+                      
+                      Content to review:
+                      {file_content[:2000]}
+                      
+                      Provide ethical considerations and recommendations.''',
+                      agent=ai_ethics_agent,
+                      expected_output='AI ethics and safety review with recommendations'
+                  )
+                  tasks.append(ethics_task)
+              
+              return tasks
+
+          def run_crew_review(file_path, file_content):
+              """Run the crew review on a document"""
+              tasks = create_review_tasks(file_path, file_content)
+              
+              crew = Crew(
+                  agents=[legal_compliance_agent, technical_writer_agent, 
+                         software_architect_agent, security_specialist_agent, ai_ethics_agent],
+                  tasks=tasks,
+                  process=Process.sequential,
+                  verbose=True
+              )
+              
+              result = crew.kickoff()
+              return result
+
+          if __name__ == '__main__':
+              import sys
+              if len(sys.argv) < 2:
+                  print("Usage: python crew_config.py <file_path>")
+                  sys.exit(1)
+              
+              file_path = sys.argv[1]
+              with open(file_path, 'r') as f:
+                  content = f.read()
+              
+              result = run_crew_review(file_path, content)
+              print("\n=== CREW REVIEW RESULTS ===\n")
+              print(result)
+          EOF
+
+      - name: Run CrewAI review on changed files
+        if: github.event_name == 'pull_request'
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          # Get list of changed markdown files
+          git diff --name-only origin/${{ github.base_ref }}...HEAD | grep '\.md$' > changed_files.txt || true
+          
+          if [ -s changed_files.txt ]; then
+            echo "Running CrewAI review on changed documentation files..."
+            
+            # Review first 3 files to avoid excessive API usage
+            head -3 changed_files.txt | while read file; do
+              if [ -f "$file" ]; then
+                echo "Reviewing: $file"
+                python crew_config.py "$file" > "review_${file//\//_}.txt" 2>&1 || echo "Review failed for $file"
+              fi
+            done
+            
+            # Combine results
+            cat review_*.txt > crew_review_results.txt 2>/dev/null || echo "No reviews completed"
+          else
+            echo "No markdown files changed"
+            echo "No markdown files changed in this PR" > crew_review_results.txt
+          fi
+
+      - name: Comment review results on PR
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            let reviewResults = 'No review results available';
+            
+            try {
+              reviewResults = fs.readFileSync('crew_review_results.txt', 'utf8');
+            } catch (e) {
+              console.log('Could not read review results');
+            }
+            
+            const comment = `## 🤖 CrewAI Documentation Review
+            
+            Our AI crew has reviewed the documentation changes:
+            
+            <details>
+            <summary>View detailed review results</summary>
+            
+            \`\`\`
+            ${reviewResults.slice(0, 50000)}
+            \`\`\`
+            
+            </details>
+            
+            **Note:** This is an automated review by AI agents specialized in:
+            - Legal compliance and regulations
+            - Technical documentation quality
+            - Software architecture best practices
+            - Security standards and practices
+            - AI ethics and safety
+            
+            Please review the feedback and make appropriate changes.
+            `;
+            
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.pull_request.number,
+              body: comment
+            });

@@ -1,0 +1,103 @@
+name: Issue Triage and Labeling
+
+on:
+  issues:
+    types: [opened, edited, reopened]
+  issue_comment:
+    types: [created]
+
+permissions:
+  issues: write
+  contents: read
+
+jobs:
+  triage:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Auto-label based on title and body
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const issue = context.payload.issue;
+            const title = issue.title.toLowerCase();
+            const body = (issue.body || '').toLowerCase();
+            const labels = [];
+
+            // Category labels based on keywords
+            const categoryMap = {
+              'infrastructure': ['infrastructure', 'network', 'compute', 'storage', 'deployment'],
+              'systems': ['linux', 'ubuntu', 'desktop', 'laptop', 'server'],
+              'software': ['code', 'programming', 'database', 'application'],
+              'ai-automation': ['ai', 'agent', 'llm', 'automation', 'ansible', 'ml'],
+              'governance': ['compliance', 'audit', 'policy', 'ethics'],
+              'security': ['security', 'encryption', 'vulnerability', 'hardening'],
+              'documentation': ['docs', 'documentation', 'readme', 'guide']
+            };
+
+            for (const [label, keywords] of Object.entries(categoryMap)) {
+              if (keywords.some(kw => title.includes(kw) || body.includes(kw))) {
+                labels.push(label);
+              }
+            }
+
+            // Priority labels
+            if (title.includes('[urgent]') || body.includes('urgent')) {
+              labels.push('priority:high');
+            } else if (title.includes('[low]') || body.includes('low priority')) {
+              labels.push('priority:low');
+            } else {
+              labels.push('priority:medium');
+            }
+
+            // Type labels
+            if (title.includes('bug') || body.includes('error')) {
+              labels.push('type:bug');
+            } else if (title.includes('feature') || body.includes('enhancement')) {
+              labels.push('type:enhancement');
+            } else if (title.includes('question')) {
+              labels.push('type:question');
+            }
+
+            // Add labels if any were identified
+            if (labels.length > 0) {
+              await github.rest.issues.addLabels({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                labels: labels
+              });
+            }
+
+      - name: Add to project board
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const issue = context.payload.issue;
+            
+            // Add comment with triage information
+            const comment = `🤖 **Automated Triage**
+            
+            This issue has been automatically triaged and labeled. 
+            
+            **Next Steps:**
+            - Review and adjust labels if needed
+            - Assign to appropriate team member
+            - Link to relevant standards in \`standards-and-procedures/\`
+            
+            For standards reference:
+            - Infrastructure issues → \`standards-and-procedures/01-infrastructure/\`
+            - Systems issues → \`standards-and-procedures/02-systems/\`
+            - Software issues → \`standards-and-procedures/03-software/\`
+            - AI/Automation issues → \`standards-and-procedures/04-ai-and-automation/\`
+            - Governance issues → \`standards-and-procedures/05-governance/\``;
+            
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issue.number,
+              body: comment
+            });
